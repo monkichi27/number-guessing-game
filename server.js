@@ -295,110 +295,101 @@ io.on('connection', (socket) => {
     
     // สร้างห้องใหม่
     socket.on('createRoom', (callback) => {
-        try {
-            let roomCode;
-            do {
-                roomCode = generateRoomCode();
-            } while (gameRooms.has(roomCode));
-            
-            const room = {
-                code: roomCode,
-                players: {},
-                gameState: {
-                    started: false,
-                    currentPlayer: 1,
-                    secrets: {},
-                    history: []
-                },
-                createdAt: new Date(),
-                disconnectTimers: new Map()
-            };
-            
-            gameRooms.set(roomCode, room);
-            
-            room.players[socket.id] = {
-                id: socket.id,
-                playerNumber: 1,
-                nickname: 'ผู้เล่น 1',
-                ready: false,
-                connected: true,
-                lastSeen: new Date()
-            };
-            
-            playerSockets.set(socket.id, roomCode);
-            savePlayerSession(socket, roomCode, 1);
-            socket.join(roomCode);
-            
-            console.log(`🏠 สร้าง Room: ${roomCode}`);
-            
-            // ส่งผลลัพธ์กลับทันที
-            callback({
-                success: true,
-                roomCode: roomCode,
-                playerNumber: 1
-            });
-            
-            socket.emit('roomUpdate', {
-                roomCode: roomCode,
-                players: createCleanPlayersObject(room.players),
-                gameState: room.gameState
-            });
-        } catch (error) {
-            console.error('❌ Error ใน createRoom:', error);
-            callback({ success: false, message: 'เกิดข้อผิดพลาดในการสร้างห้อง' });
-        }
+        let roomCode;
+        do {
+            roomCode = generateRoomCode();
+        } while (gameRooms.has(roomCode));
+        
+        const room = {
+            code: roomCode,
+            players: {},
+            gameState: {
+                started: false,
+                currentPlayer: 1,
+                secrets: {},
+                history: []
+            },
+            createdAt: new Date(),
+            disconnectTimers: new Map()
+        };
+        
+        gameRooms.set(roomCode, room);
+        
+        room.players[socket.id] = {
+            id: socket.id,
+            playerNumber: 1,
+            nickname: 'ผู้เล่น 1',
+            ready: false,
+            connected: true,
+            lastSeen: new Date()
+        };
+        
+        playerSockets.set(socket.id, roomCode);
+        savePlayerSession(socket, roomCode, 1);
+        socket.join(roomCode);
+        
+        console.log(`🏠 สร้าง Room: ${roomCode}`);
+        
+        callback({
+            success: true,
+            roomCode: roomCode,
+            playerNumber: 1
+        });
+        
+        socket.emit('roomUpdate', {
+            roomCode: roomCode,
+            players: createCleanPlayersObject(room.players),
+            gameState: room.gameState
+        });
     });
     
     // เข้าร่วมห้อง
     socket.on('joinRoom', (data, callback) => {
-        try {
-            const { roomCode } = data;
-            const room = gameRooms.get(roomCode);
-            
-            if (!room) {
-                return callback({ success: false, message: 'ไม่พบห้องที่ระบุ' });
-            }
-            
-            const playerCount = Object.keys(room.players).length;
-            if (playerCount >= 2) {
-                return callback({ success: false, message: 'ห้องเต็มแล้ว' });
-            }
-            
-            if (room.gameState.started) {
-                return callback({ success: false, message: 'เกมเริ่มแล้ว' });
-            }
-            
-            room.players[socket.id] = {
-                id: socket.id,
-                playerNumber: 2,
-                nickname: 'ผู้เล่น 2',
-                ready: false,
-                connected: true,
-                lastSeen: new Date()
-            };
-            
-            playerSockets.set(socket.id, roomCode);
-            savePlayerSession(socket, roomCode, 2);
-            socket.join(roomCode);
-            
-            console.log(`👥 เข้าร่วม Room: ${roomCode}`);
-            
-            // ส่งผลลัพธ์กลับทันที
-            callback({
-                success: true,
-                roomCode: roomCode,
-                playerNumber: 2
-            });
-            
-            io.to(roomCode).emit('roomUpdate', {
-                roomCode: roomCode,
-                players: createCleanPlayersObject(room.players),
-                gameState: room.gameState
-            });
-        } catch (error) {
-            console.error('❌ Error ใน joinRoom:', error);
-            callback({ success: false, message: 'เกิดข้อผิดพลาดภายในเซิร์ฟเวอร์' });
+        const { roomCode } = data;
+        const room = gameRooms.get(roomCode);
+        
+        if (!room) {
+            callback({ success: false, message: 'ไม่พบห้องที่ระบุ' });
+            return;
         }
+        
+        const playerCount = Object.keys(room.players).length;
+        if (playerCount >= 2) {
+            callback({ success: false, message: 'ห้องเต็มแล้ว' });
+            return;
+        }
+        
+        if (room.gameState.started) {
+            callback({ success: false, message: 'เกมเริ่มแล้ว' });
+            return;
+        }
+        
+        room.players[socket.id] = {
+            id: socket.id,
+            playerNumber: 2,
+            nickname: 'ผู้เล่น 2',
+            ready: false,
+            connected: true,
+            lastSeen: new Date()
+        };
+        
+        playerSockets.set(socket.id, roomCode);
+        savePlayerSession(socket, roomCode, 2);
+        socket.join(roomCode);
+        
+        console.log(`👥 เข้าร่วม Room: ${roomCode}`);
+        
+        callback({
+            success: true,
+            roomCode: roomCode,
+            playerNumber: 2
+        });
+        
+        io.to(roomCode).emit('roomUpdate', {
+            roomCode: roomCode,
+            players: createCleanPlayersObject(room.players),
+            gameState: room.gameState
+        });
     });
     
     // ระบบ Reconnection
@@ -428,158 +419,154 @@ io.on('connection', (socket) => {
     
     // ส่งตัวเลขลับ
     socket.on('submitSecret', (data, callback) => {
-        try {
-            const { secret } = data;
-            const roomCode = playerSockets.get(socket.id);
-            const room = gameRooms.get(roomCode);
-            
-            if (!room) {
-                return callback({ success: false, message: 'ไม่พบห้อง' });
-            }
-            
-            const player = room.players[socket.id];
-            if (!player) {
-                return callback({ success: false, message: 'ไม่พบผู้เล่น' });
-            }
-            
-            if (player.ready) {
-                return callback({ success: true, message: 'ส่งตัวเลขแล้ว' });
-            }
-            
-            if (!validateNumber(secret)) {
-                return callback({ 
-                    success: false, 
-                    message: 'ตัวเลขไม่ถูกต้อง (ต้องเป็น 4 หลัก ไม่ซ้ำ)' 
-                });
-            }
-            
-            room.gameState.secrets[socket.id] = secret;
-            room.players[socket.id].ready = true;
-            
-            console.log(`✅ Player ${player.playerNumber} ส่งตัวเลขใน Room: ${roomCode}`);
-            
-            // ส่งผลลัพธ์กลับทันที
-            callback({ success: true, message: 'ส่งตัวเลขสำเร็จ' });
-            
-            // ตรวจสอบความพร้อม
-            const allPlayers = Object.values(room.players);
-            const allPlayersReady = allPlayers.every(p => p.ready);
-            const playerCount = allPlayers.length;
-            
-            if (allPlayersReady && playerCount === 2) {
-                setTimeout(() => {
-                    room.gameState.started = true;
-                    room.gameState.currentPlayer = 1;
-                    room.gameState.history = [];
-                    room.gameState.startedAt = new Date();
-                    
-                    console.log(`🎮 เริ่มเกมใน Room: ${roomCode}`);
-                    
-                    io.to(roomCode).emit('gameStart', {
-                        currentPlayer: room.gameState.currentPlayer,
-                        startedAt: room.gameState.startedAt
-                    });
-                }, 500);
-            }
-            
-            io.to(roomCode).emit('roomUpdate', {
-                roomCode: roomCode,
-                players: createCleanPlayersObject(room.players),
-                gameState: {
-                    started: room.gameState.started,
-                    currentPlayer: room.gameState.currentPlayer
-                }
-            });
-        } catch (error) {
-            console.error('❌ Error ใน submitSecret:', error);
-            callback({ success: false, message: 'เกิดข้อผิดพลาดภายในเซิร์ฟเวอร์' });
+        const { secret } = data;
+        const roomCode = playerSockets.get(socket.id);
+        const room = gameRooms.get(roomCode);
+        
+        if (!room) {
+            callback({ success: false, message: 'ไม่พบห้อง' });
+            return;
         }
+        
+        const player = room.players[socket.id];
+        if (!player) {
+            callback({ success: false, message: 'ไม่พบผู้เล่น' });
+            return;
+        }
+        
+        if (player.ready) {
+            callback({ success: true, message: 'ส่งตัวเลขแล้ว' });
+            return;
+        }
+        
+        if (!validateNumber(secret)) {
+            callback({ 
+                success: false, 
+                message: 'ตัวเลขไม่ถูกต้อง (ต้องเป็น 4 หลัก ไม่ซ้ำ)' 
+            });
+            return;
+        }
+        
+        room.gameState.secrets[socket.id] = secret;
+        room.players[socket.id].ready = true;
+        
+        console.log(`✅ Player ${player.playerNumber} ส่งตัวเลขใน Room: ${roomCode}`);
+        
+        callback({ success: true, message: 'ส่งตัวเลขสำเร็จ' });
+        
+        // ตรวจสอบความพร้อม
+        const allPlayers = Object.values(room.players);
+        const allPlayersReady = allPlayers.every(p => p.ready);
+        const playerCount = allPlayers.length;
+        
+        if (allPlayersReady && playerCount === 2) {
+            setTimeout(() => {
+                room.gameState.started = true;
+                room.gameState.currentPlayer = 1;
+                room.gameState.history = [];
+                room.gameState.startedAt = new Date();
+                
+                console.log(`🎮 เริ่มเกมใน Room: ${roomCode}`);
+                
+                io.to(roomCode).emit('gameStart', {
+                    currentPlayer: room.gameState.currentPlayer,
+                    startedAt: room.gameState.startedAt
+                });
+            }, 500);
+        }
+        
+        io.to(roomCode).emit('roomUpdate', {
+            roomCode: roomCode,
+            players: createCleanPlayersObject(room.players),
+            gameState: {
+                started: room.gameState.started,
+                currentPlayer: room.gameState.currentPlayer
+            }
+        });
     });
     
     // ทายตัวเลข
     socket.on('makeGuess', (data, callback) => {
-        try {
-            const { guess } = data;
-            const roomCode = playerSockets.get(socket.id);
-            const room = gameRooms.get(roomCode);
-            
-            // ตรวจสอบพื้นฐาน
-            if (!room || !room.gameState.started) {
-                return callback({ success: false, message: 'เกมยังไม่เริ่ม' });
-            }
-            
-            if (!validateNumber(guess)) {
-                return callback({ 
-                    success: false, 
-                    message: 'ตัวเลขไม่ถูกต้อง (ต้องเป็น 4 หลัก ไม่ซ้ำ)' 
-                });
-            }
-            
-            const player = room.players[socket.id];
-            if (!player) {
-                return callback({ success: false, message: 'ไม่พบผู้เล่น' });
-            }
-            
-            if (player.playerNumber !== room.gameState.currentPlayer) {
-                return callback({ success: false, message: 'ไม่ใช่ตาของคุณ' });
-            }
-            
-            // หาตัวเลขลับของอีกฝ่าย
-            const opponentSocketId = Object.keys(room.players).find(id => 
-                id !== socket.id
-            );
-            const opponentSecret = room.gameState.secrets[opponentSocketId];
-            
-            if (!opponentSecret) {
-                return callback({ success: false, message: 'ไม่พบตัวเลขของอีกฝ่าย' });
-            }
-            
-            const result = checkGuess(guess, opponentSecret);
-            
-            const historyItem = {
-                player: player.playerNumber,
-                playerName: player.nickname,
-                guess: guess,
-                result: result,
-                isWin: result.correctPosition === 4,
-                timestamp: new Date()
-            };
-            
-            room.gameState.history.push(historyItem);
-            
-            console.log(`🎯 Player ${player.playerNumber} ทาย: ${guess} → ${result.correctPosition}หลัก ${result.correctNumber}ตัว`);
-            
-            // ส่งผลลัพธ์กลับทันที
+        const { guess } = data;
+        const roomCode = playerSockets.get(socket.id);
+        const room = gameRooms.get(roomCode);
+        
+        if (!room || !room.gameState.started) {
+            callback({ success: false, message: 'เกมยังไม่เริ่ม' });
+            return;
+        }
+        
+        if (!validateNumber(guess)) {
             callback({ 
-                success: true, 
-                result: result,
-                isWin: result.correctPosition === 4
+                success: false, 
+                message: 'ตัวเลขไม่ถูกต้อง (ต้องเป็น 4 หลัก ไม่ซ้ำ)' 
+            });
+            return;
+        }
+        
+        const player = room.players[socket.id];
+        if (!player) {
+            callback({ success: false, message: 'ไม่พบผู้เล่น' });
+            return;
+        }
+        
+        if (player.playerNumber !== room.gameState.currentPlayer) {
+            callback({ success: false, message: 'ไม่ใช่ตาของคุณ' });
+            return;
+        }
+        
+        // หาตัวเลขลับของอีกฝ่าย
+        const opponentSocketId = Object.keys(room.players).find(id => 
+            id !== socket.id
+        );
+        const opponentSecret = room.gameState.secrets[opponentSocketId];
+        
+        if (!opponentSecret) {
+            callback({ success: false, message: 'ไม่พบตัวเลขของอีกฝ่าย' });
+            return;
+        }
+        
+        const result = checkGuess(guess, opponentSecret);
+        
+        const historyItem = {
+            player: player.playerNumber,
+            playerName: player.nickname,
+            guess: guess,
+            result: result,
+            isWin: result.correctPosition === 4,
+            timestamp: new Date()
+        };
+        
+        room.gameState.history.push(historyItem);
+        
+        console.log(`🎯 Player ${player.playerNumber} ทาย: ${guess} → ${result.correctPosition}หลัก ${result.correctNumber}ตัว`);
+        
+        callback({ 
+            success: true, 
+            result: result,
+            isWin: result.correctPosition === 4
+        });
+        
+        if (result.correctPosition === 4) {
+            room.gameState.winner = player.playerNumber;
+            room.gameState.winningGuess = guess;
+            
+            io.to(roomCode).emit('gameEnd', {
+                winner: player.playerNumber,
+                winnerName: player.nickname,
+                winningGuess: guess,
+                history: room.gameState.history
             });
             
-            if (result.correctPosition === 4) {
-                room.gameState.winner = player.playerNumber;
-                room.gameState.winningGuess = guess;
-                
-                io.to(roomCode).emit('gameEnd', {
-                    winner: player.playerNumber,
-                    winnerName: player.nickname,
-                    winningGuess: guess,
-                    history: room.gameState.history
-                });
-                
-                console.log(`🏆 Player ${player.playerNumber} ชนะใน Room: ${roomCode}`);
-            } else {
-                room.gameState.currentPlayer = room.gameState.currentPlayer === 1 ? 2 : 1;
-                
-                io.to(roomCode).emit('turnChange', {
-                    currentPlayer: room.gameState.currentPlayer,
-                    lastGuess: historyItem,
-                    history: room.gameState.history
-                });
-            }
-        } catch (error) {
-            console.error('❌ Error ใน makeGuess:', error);
-            callback({ success: false, message: 'เกิดข้อผิดพลาดภายในเซิร์ฟเวอร์' });
+            console.log(`🏆 Player ${player.playerNumber} ชนะใน Room: ${roomCode}`);
+        } else {
+            room.gameState.currentPlayer = room.gameState.currentPlayer === 1 ? 2 : 1;
+            
+            io.to(roomCode).emit('turnChange', {
+                currentPlayer: room.gameState.currentPlayer,
+                lastGuess: historyItem,
+                history: room.gameState.history
+            });
         }
     });
     
