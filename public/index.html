@@ -599,11 +599,12 @@
                 <p>แชร์รหัสนี้ให้เพื่อนเพื่อเข้าร่วมเกม</p>
                 <div style="margin-top: 15px;">
                     <button class="btn btn-secondary" onclick="copyRoomCode()">📋 คัดลอกรหัส</button>
-                    <button class="btn" onclick="shareRoomCode()">📤 แชร์</button>
-                    <button class="btn" onclick="shareNgrokLink()" style="background: linear-gradient(135deg, #17a2b8 0%, #138496 100%);">🌐 แชร์ลิงก์</button>
+                    <button class="btn" onclick="shareRoomCode()">📤 แชร์ลิงก์</button>
+                    <button class="btn" onclick="shareNgrokLink()" style="background: linear-gradient(135deg, #17a2b8 0%, #138496 100%);">🌐 แชร์ลิงก์พิเศษ</button>
                 </div>
                 <div style="margin-top: 10px; font-size: 0.9em; color: #666;">
-                    <span id="currentUrl"></span>
+                    <strong>ลิงก์เข้าห้องตรง:</strong><br>
+                    <span id="currentUrl" style="word-break: break-all;"></span>
                 </div>
             </div>
             
@@ -1122,10 +1123,13 @@
                         playerId: gameState.playerId
                     });
                     
+                    // อัปเดต URL
+                    updateUrlWithRoom(gameState.roomCode);
+                    
                     document.getElementById('displayRoomCode').textContent = response.roomCode;
                     document.getElementById('lobbyPhase').style.display = 'none';
                     document.getElementById('setupPhase').style.display = 'block';
-                    document.getElementById('currentUrl').textContent = window.location.origin;
+                    document.getElementById('currentUrl').textContent = `${window.location.origin}/?room=${response.roomCode}`;
                     
                     showNotification(`สร้างห้อง ${response.roomCode} สำเร็จ!`, 'success');
                 } else {
@@ -1194,12 +1198,15 @@
                         playerId: gameState.playerId
                     });
                     
+                    // อัปเดต URL
+                    updateUrlWithRoom(gameState.roomCode);
+                    
                     document.getElementById('displayRoomCode').textContent = response.roomCode;
                     document.getElementById('lobbyPhase').style.display = 'none';
                     document.getElementById('setupPhase').style.display = 'block';
                     document.getElementById('waitingMessage').style.display = 'none';
                     document.getElementById('bothPlayersReady').style.display = 'block';
-                    document.getElementById('currentUrl').textContent = window.location.origin;
+                    document.getElementById('currentUrl').textContent = `${window.location.origin}/?room=${response.roomCode}`;
                     
                     showNotification(`เข้าร่วมห้อง ${response.roomCode} สำเร็จ!`, 'success');
                 } else if (response) {
@@ -1534,6 +1541,9 @@
             // ล้าง session
             SessionManager.clearSession();
             
+            // ล้าง URL parameters
+            clearUrlParams();
+            
             // หยุด heartbeat
             if (gameState.heartbeatInterval) {
                 clearInterval(gameState.heartbeatInterval);
@@ -1628,7 +1638,66 @@
             });
         }
 
+        // ฟังก์ชันอ่าน URL parameters
+        function getUrlParameter(name) {
+            const urlParams = new URLSearchParams(window.location.search);
+            return urlParams.get(name);
+        }
+
+        // ฟังก์ชัน Auto Join จาก URL
+        function checkAutoJoin() {
+            const roomCodeFromUrl = getUrlParameter('room');
+            if (roomCodeFromUrl && roomCodeFromUrl.length === 6) {
+                console.log(`🔗 พบรหัสห้องใน URL: ${roomCodeFromUrl}`);
+                
+                // ใส่รหัสห้องใน input และแสดง join section
+                document.getElementById('roomCodeInput').value = roomCodeFromUrl.toUpperCase();
+                showJoinRoom();
+                
+                // แสดงข้อความชี้แจง
+                showNotification(`พบรหัสห้อง ${roomCodeFromUrl.toUpperCase()} จาก URL - กดเข้าร่วมได้เลย!`, 'info');
+                
+                // highlight ปุ่มเข้าร่วม
+                const joinBtn = document.querySelector('#joinRoomSection .btn');
+                if (joinBtn) {
+                    joinBtn.style.animation = 'pulse 2s infinite';
+                    joinBtn.style.background = 'linear-gradient(135deg, #28a745 0%, #20c997 100%)';
+                }
+                
+                // Auto-join หลังจาก socket เชื่อมต่อแล้ว (ถ้าต้องการ)
+                // setTimeout(() => {
+                //     if (gameState.socket && gameState.socket.connected && !gameState.roomCode) {
+                //         joinRoom();
+                //     }
+                // }, 2000);
+                
+                return true;
+            }
+            return false;
+        }
+
+        // ฟังก์ชันอัปเดต URL เมื่อเข้าห้อง
+        function updateUrlWithRoom(roomCode) {
+            if (roomCode) {
+                const newUrl = `${window.location.origin}/?room=${roomCode}`;
+                window.history.replaceState({ roomCode }, `เกมทายตัวเลข - ห้อง ${roomCode}`, newUrl);
+            }
+        }
+
+        // ฟังก์ชันล้าง URL parameter เมื่อออกจากห้อง
+        function clearUrlParams() {
+            const newUrl = window.location.origin;
+            window.history.replaceState({}, 'เกมทายตัวเลข 4 หลัก', newUrl);
+        }
+
         function validateNumber(num) {
+            if (!num || num.length !== 4) return false;
+            if (!/^\d{4}$/.test(num)) return false;
+            
+            const digits = num.split('');
+            const uniqueDigits = [...new Set(digits)];
+            return uniqueDigits.length === 4;
+        }
             if (!num || num.length !== 4) return false;
             if (!/^\d{4}$/.test(num)) return false;
             
@@ -1822,7 +1891,9 @@
                 return;
             }
 
-            const shareText = `🎯 มาเล่นเกมทายตัวเลข!\n\nรหัสห้อง: ${gameState.roomCode}\nลิงก์: ${window.location.origin}\n\nแล้วมาเจอกันในเกม! 🎮`;
+            const currentUrl = window.location.origin;
+            const shareUrl = `${currentUrl}/?room=${gameState.roomCode}`;
+            const shareText = `🎯 มาเล่นเกมทายตัวเลข!\n\nรหัสห้อง: ${gameState.roomCode}\nลิงก์เข้าห้องตรง: ${shareUrl}\n\nคลิกลิงก์แล้วเข้าเล่นได้เลย! 🎮`;
 
             try {
                 const textArea = document.createElement('textarea');
@@ -1839,7 +1910,7 @@
                 document.body.removeChild(textArea);
                 
                 if (successful) {
-                    showNotification('คัดลอกข้อความแชร์แล้ว! นำไปส่งให้เพื่อน', 'success');
+                    showNotification('คัดลอกลิงก์แชร์แล้ว! เพื่อนคลิกลิงก์แล้วเข้าได้เลย', 'success');
                 } else {
                     showShareDialog(shareText);
                 }
@@ -1859,8 +1930,9 @@
         function shareNgrokLink() {
             const currentUrl = window.location.origin;
             const isNgrok = currentUrl.includes('ngrok') || currentUrl.includes('tunnel');
+            const shareUrl = `${currentUrl}/?room=${gameState.roomCode}`;
             
-            const shareText = `🎯 มาเล่นเกมทายตัวเลข!\n\n${isNgrok ? '🌐 เล่นข้ามอินเทอร์เน็ต' : '🏠 เล่นใน LAN'}\n\nรหัสห้อง: ${gameState.roomCode}\nลิงก์: ${currentUrl}\n\nแล้วมาเจอกันในเกม! 🎮`;
+            const shareText = `🎯 มาเล่นเกมทายตัวเลข!\n\n${isNgrok ? '🌐 เล่นข้ามอินเทอร์เน็ต' : '🏠 เล่นใน LAN'}\n\nรหัสห้อง: ${gameState.roomCode}\nลิงก์เข้าห้องตรง: ${shareUrl}\n\nคลิกลิงก์แล้วเข้าเล่นได้เลย! 🎮`;
             
             try {
                 const textArea = document.createElement('textarea');
@@ -1877,7 +1949,7 @@
                 document.body.removeChild(textArea);
                 
                 if (successful) {
-                    showNotification('คัดลอกลิงก์แชร์แล้ว!', 'success');
+                    showNotification('คัดลอกลิงก์แชร์แล้ว! เพื่อนคลิกลิงก์แล้วเข้าได้เลย', 'success');
                 } else {
                     showShareDialog(shareText);
                 }
@@ -1950,6 +2022,11 @@
         document.addEventListener('DOMContentLoaded', function() {
             updateConnectionStatus('waiting');
             initSocket();
+            
+            // ตรวจสอบ URL parameter สำหรับ auto-join
+            setTimeout(() => {
+                checkAutoJoin();
+            }, 1000);
             
             console.log('🎮 เกมทายตัวเลข 4 หลัก - เวอร์ชั่น Real-time');
             console.log('🔗 รองรับ Reconnection และ Session Management');
