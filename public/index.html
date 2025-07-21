@@ -1698,13 +1698,6 @@
             const uniqueDigits = [...new Set(digits)];
             return uniqueDigits.length === 4;
         }
-            if (!num || num.length !== 4) return false;
-            if (!/^\d{4}$/.test(num)) return false;
-            
-            const digits = num.split('');
-            const uniqueDigits = [...new Set(digits)];
-            return uniqueDigits.length === 4;
-        }
 
         // Session Restore Functions
         function showSessionRestoreDialog(sessionData) {
