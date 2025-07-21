@@ -719,6 +719,14 @@
             lastPingTime: null
         };
 
+        // ตัวแปรสำหรับป้องกัน double-click
+        let actionInProgress = {
+            makeGuess: false,
+            submitSecret: false,
+            joinRoom: false,
+            createRoom: false
+        };
+
         // Session Management (ใช้ in-memory เนื่องจาก artifacts ไม่รองรับ localStorage)
         const SessionManager = {
             session: null,
@@ -787,13 +795,21 @@
                 updateConnectionStatus('connected');
                 startHeartbeat();
                 gameState.reconnectAttempts = 0;
+                gameState.isReconnecting = false;
                 
                 hideReconnectionOverlay();
                 
                 // ตรวจสอบ session ที่บันทึกไว้
                 const savedSession = SessionManager.loadSession();
-                if (savedSession && !gameState.isReconnecting) {
+                if (savedSession && !gameState.roomCode) {
                     showSessionRestoreDialog(savedSession);
+                }
+                
+                // ถ้ากำลัง reconnect เข้าเกม ให้ทำต่อ
+                if (gameState.roomCode && gameState.playerNumber && !gameState.gameStarted) {
+                    setTimeout(() => {
+                        attemptGameReconnect();
+                    }, 500);
                 }
             });
             
@@ -910,50 +926,84 @@
         function attemptReconnection() {
             if (gameState.isReconnecting) return;
             
+            console.log('🔄 เริ่มขั้นตอนการเชื่อมต่อกลับ');
+            
             gameState.isReconnecting = true;
             gameState.reconnectAttempts = 0;
             
-            showReconnectionOverlay();
             updateConnectionStatus('reconnecting');
+            
+            // แสดง overlay เฉพาะถ้าอยู่ในเกม
+            if (gameState.roomCode) {
+                showReconnectionOverlay();
+            }
             
             const reconnectInterval = setInterval(() => {
                 gameState.reconnectAttempts++;
                 console.log(`🔄 ความพยายามเชื่อมต่อครั้งที่ ${gameState.reconnectAttempts}/${gameState.maxReconnectAttempts}`);
                 
-                if (gameState.socket.connected) {
+                if (gameState.socket && gameState.socket.connected) {
+                    console.log('✅ เชื่อมต่อสำเร็จ');
                     clearInterval(reconnectInterval);
                     gameState.isReconnecting = false;
+                    hideReconnectionOverlay();
                     
-                    // พยายาม reconnect เข้าเกม
+                    // พยายาม reconnect เข้าเกมถ้าจำเป็น
                     if (gameState.roomCode && gameState.playerNumber) {
-                        attemptGameReconnect();
+                        setTimeout(() => {
+                            attemptGameReconnect();
+                        }, 1000);
                     }
                     return;
                 }
                 
                 if (gameState.reconnectAttempts >= gameState.maxReconnectAttempts) {
+                    console.log('❌ เชื่อมต่อไม่สำเร็จ');
                     clearInterval(reconnectInterval);
                     gameState.isReconnecting = false;
                     hideReconnectionOverlay();
-                    showNotification('ไม่สามารถเชื่อมต่อกลับได้ กรุณารีเฟรชหน้าเว็บ', 'error');
+                    
+                    showNotification('ไม่สามารถเชื่อมต่อกลับได้ กรุณาตรวจสอบอินเทอร์เน็ต', 'error');
+                    updateConnectionStatus('disconnected');
+                    
+                    // เสนอแนะให้รีเฟรช
+                    setTimeout(() => {
+                        if (confirm('ไม่สามารถเชื่อมต่อกลับได้ ต้องการรีเฟรชหน้าเว็บหรือไม่?')) {
+                            window.location.reload();
+                        }
+                    }, 2000);
                     return;
                 }
             }, 2000);
         }
 
         function attemptGameReconnect() {
-            if (!gameState.roomCode || !gameState.playerNumber) return;
+            if (!gameState.roomCode || !gameState.playerNumber) {
+                console.log('❌ ไม่มีข้อมูลเกมสำหรับ reconnect');
+                return;
+            }
             
             console.log(`🎮 พยายาม reconnect เข้าเกม: Room ${gameState.roomCode}, Player ${gameState.playerNumber}`);
+            
+            // แสดงสถานะกำลังเชื่อมต่อ
+            showReconnectionOverlay();
+            
+            // ตั้ง timeout เพื่อป้องกันการค้าง
+            const reconnectTimeout = setTimeout(() => {
+                hideReconnectionOverlay();
+                showNotification('การเชื่อมต่อกลับเข้าเกมใช้เวลานาน กรุณาลองใหม่', 'warning');
+                validateAndFixUI();
+            }, 15000);
             
             gameState.socket.emit('attemptReconnect', {
                 roomCode: gameState.roomCode,
                 playerNumber: gameState.playerNumber
             }, (response) => {
+                clearTimeout(reconnectTimeout);
                 hideReconnectionOverlay();
                 gameState.isReconnecting = false;
                 
-                if (response.success) {
+                if (response && response.success) {
                     console.log('✅ Reconnect เข้าเกมสำเร็จ');
                     
                     // กู้คืนสถานะเกม
@@ -967,6 +1017,7 @@
                     
                     // อัปเดต UI
                     if (response.gameState.started) {
+                        document.getElementById('lobbyPhase').style.display = 'none';
                         document.getElementById('setupPhase').style.display = 'none';
                         document.getElementById('gamePhase').style.display = 'block';
                         updateCurrentTurn();
@@ -974,6 +1025,7 @@
                     } else {
                         document.getElementById('lobbyPhase').style.display = 'none';
                         document.getElementById('setupPhase').style.display = 'block';
+                        document.getElementById('gamePhase').style.display = 'none';
                         updateRoomDisplay({ players: response.players });
                         
                         if (gameState.secretSubmitted) {
@@ -981,13 +1033,21 @@
                         }
                     }
                     
+                    // แก้ไข UI หลังจาก reconnect
+                    setTimeout(() => {
+                        validateAndFixUI();
+                    }, 500);
+                    
                     showNotification('เชื่อมต่อกลับเข้าเกมสำเร็จ!', 'success');
                 } else {
-                    console.log('❌ Reconnect ล้มเหลว:', response.message);
-                    showNotification('ไม่สามารถกลับเข้าเกมได้: ' + response.message, 'error');
+                    console.log('❌ Reconnect ล้มเหลว:', response ? response.message : 'ไม่ได้รับการตอบกลับ');
+                    showNotification('ไม่สามารถกลับเข้าเกมได้: ' + (response ? response.message : 'ไม่ได้รับการตอบกลับ'), 'error');
                     
-                    // กลับไปหน้า lobby
-                    leaveRoom();
+                    // แก้ไข UI และกลับไปหน้า lobby
+                    validateAndFixUI();
+                    setTimeout(() => {
+                        leaveRoom();
+                    }, 2000);
                 }
             });
         }
@@ -1003,17 +1063,42 @@
             }, 5000);
         }
 
+        // ฟังก์ชันตรวจสอบสถานะเกม
+        function checkGameState() {
+            if (!gameState.socket) {
+                console.log('⚠️ Socket ไม่พร้อมใช้งาน');
+                return false;
+            }
+            
+            if (!gameState.socket.connected) {
+                console.log('⚠️ Socket ไม่ได้เชื่อมต่อ');
+                if (!gameState.isReconnecting) {
+                    attemptReconnection();
+                }
+                return false;
+            }
+            
+            return true;
+        }
+
         function createRoom() {
-            if (!gameState.socket || !gameState.socket.connected) {
+            if (actionInProgress.createRoom) {
+                console.log('🚫 กำลังสร้างห้อง กรุณารอ...');
+                return;
+            }
+            
+            if (!checkGameState()) {
                 showNotification('ไม่สามารถเชื่อมต่อ Server ได้', 'error');
                 return;
             }
             
+            actionInProgress.createRoom = true;
             const createBtn = document.querySelector('.btn-secondary');
             createBtn.disabled = true;
             createBtn.textContent = '🔄 กำลังสร้าง...';
             
             const timeout = setTimeout(() => {
+                actionInProgress.createRoom = false;
                 createBtn.disabled = false;
                 createBtn.textContent = '🎮 สร้างห้องใหม่';
                 showNotification('การเชื่อมต่อช้า กรุณาลองใหม่', 'warning');
@@ -1021,6 +1106,7 @@
             
             gameState.socket.emit('createRoom', (response) => {
                 clearTimeout(timeout);
+                actionInProgress.createRoom = false;
                 createBtn.disabled = false;
                 createBtn.textContent = '🎮 สร้างห้องใหม่';
                 
@@ -1059,20 +1145,44 @@
         }
 
         function joinRoom() {
+            if (actionInProgress.joinRoom) {
+                console.log('🚫 กำลังเข้าร่วมห้อง กรุณารอ...');
+                return;
+            }
+            
             const roomCode = document.getElementById('roomCodeInput').value.toUpperCase().trim();
+            const joinBtn = document.querySelector('#joinRoomSection .btn');
             
             if (roomCode.length !== 6) {
                 showNotification('กรุณากรอกรหัสห้อง 6 หลัก', 'error');
                 return;
             }
             
-            if (!gameState.socket || !gameState.socket.connected) {
-                showNotification('ไม่สามารถเชื่อมต่อ Server ได้', 'error');
+            if (!checkGameState()) {
+                showNotification('ไม่สามารถเชื่อมต่อ Server ได้ กำลังพยายามเชื่อมต่อ...', 'warning');
                 return;
             }
             
+            actionInProgress.joinRoom = true;
+            // แสดงสถานะกำลังเข้าร่วม
+            joinBtn.disabled = true;
+            joinBtn.textContent = '🔄 กำลังเข้าร่วม...';
+            
+            // ตั้ง timeout
+            const timeout = setTimeout(() => {
+                actionInProgress.joinRoom = false;
+                joinBtn.disabled = false;
+                joinBtn.textContent = 'เข้าร่วม';
+                showNotification('การเชื่อมต่อช้า กรุณาลองใหม่', 'warning');
+            }, 8000);
+            
             gameState.socket.emit('joinRoom', { roomCode }, (response) => {
-                if (response.success) {
+                clearTimeout(timeout);
+                actionInProgress.joinRoom = false;
+                joinBtn.disabled = false;
+                joinBtn.textContent = 'เข้าร่วม';
+                
+                if (response && response.success) {
                     gameState.roomCode = response.roomCode;
                     gameState.playerNumber = response.playerNumber;
                     gameState.playerId = gameState.socket.id;
@@ -1092,8 +1202,14 @@
                     document.getElementById('currentUrl').textContent = window.location.origin;
                     
                     showNotification(`เข้าร่วมห้อง ${response.roomCode} สำเร็จ!`, 'success');
+                } else if (response) {
+                    showNotification(response.message || 'เกิดข้อผิดพลาด', 'error');
                 } else {
-                    showNotification(response.message, 'error');
+                    showNotification('ไม่ได้รับการตอบกลับจาก Server', 'error');
+                    
+                    if (!gameState.socket.connected && !gameState.isReconnecting) {
+                        attemptReconnection();
+                    }
                 }
             });
         }
@@ -1125,8 +1241,14 @@
         }
 
         function submitSecret() {
+            if (actionInProgress.submitSecret) {
+                console.log('🚫 กำลังส่งตัวเลขลับ กรุณารอ...');
+                return;
+            }
+            
             const secret = document.getElementById('mySecret').value.trim();
             const errorElement = document.getElementById('mySecretError');
+            const submitBtn = document.querySelector('#myPlayerSection .btn');
             
             errorElement.textContent = '';
             
@@ -1135,8 +1257,43 @@
                 return;
             }
             
+            if (!checkGameState()) {
+                errorElement.textContent = 'ไม่สามารถเชื่อมต่อ Server ได้';
+                return;
+            }
+            
+            if (gameState.secretSubmitted) {
+                errorElement.textContent = 'ส่งตัวเลขแล้ว';
+                errorElement.style.color = 'green';
+                return;
+            }
+            
+            // ป้องกัน double-click
+            actionInProgress.submitSecret = true;
+            
+            // แสดงสถานะกำลังส่ง
+            submitBtn.disabled = true;
+            submitBtn.textContent = '🔄 กำลังส่ง...';
+            
+            // ตั้ง timeout
+            const timeout = setTimeout(() => {
+                actionInProgress.submitSecret = false;
+                submitBtn.disabled = false;
+                submitBtn.textContent = '🔒 ยืนยัน';
+                errorElement.textContent = 'การเชื่อมต่อช้า กรุณาลองใหม่';
+                
+                if (!gameState.socket.connected && !gameState.isReconnecting) {
+                    attemptReconnection();
+                }
+            }, 8000); // 8 วินาที
+            
             gameState.socket.emit('submitSecret', { secret }, (response) => {
-                if (response.success) {
+                clearTimeout(timeout);
+                actionInProgress.submitSecret = false;
+                submitBtn.disabled = false;
+                submitBtn.textContent = '🔒 ยืนยัน';
+                
+                if (response && response.success) {
                     gameState.mySecret = secret;
                     gameState.secretSubmitted = true;
                     
@@ -1145,8 +1302,14 @@
                     
                     markSecretAsSubmitted();
                     showNotification('ส่งตัวเลขลับสำเร็จ!', 'success');
+                } else if (response) {
+                    errorElement.textContent = response.message || 'เกิดข้อผิดพลาด';
                 } else {
-                    errorElement.textContent = response.message;
+                    errorElement.textContent = 'ไม่ได้รับการตอบกลับจาก Server';
+                    
+                    if (!gameState.socket.connected && !gameState.isReconnecting) {
+                        attemptReconnection();
+                    }
                 }
             });
         }
@@ -1194,20 +1357,69 @@
             gameState.isMyTurn = (data.currentPlayer === gameState.playerNumber);
             updateCurrentTurn();
             
-            document.getElementById('guessInput').value = '';
+            // ล้างช่องทายและแสดงผลใหม่
+            const guessInput = document.getElementById('guessInput');
+            const guessBtn = document.querySelector('#gameSection .btn');
+            
+            guessInput.value = '';
+            guessInput.disabled = false;
+            guessBtn.disabled = false;
+            guessBtn.textContent = '🎯 ทาย';
+            
             document.getElementById('resultSection').style.display = 'none';
         }
 
         function makeGuess() {
+            if (actionInProgress.makeGuess) {
+                console.log('🚫 กำลังประมวลผลการทาย กรุณารอ...');
+                return;
+            }
+            
             const guess = document.getElementById('guessInput').value.trim();
+            const guessBtn = document.querySelector('#gameSection .btn');
             
             if (!validateNumber(guess)) {
                 showNotification('กรุณาใส่ตัวเลข 4 หลักที่ไม่ซ้ำกัน', 'error');
                 return;
             }
             
+            if (!checkGameState()) {
+                showNotification('ไม่สามารถเชื่อมต่อ Server ได้ กำลังพยายามเชื่อมต่อใหม่...', 'warning');
+                return;
+            }
+            
+            if (!gameState.isMyTurn) {
+                showNotification('ไม่ใช่ตาของคุณ', 'warning');
+                return;
+            }
+            
+            // ป้องกัน double-click
+            actionInProgress.makeGuess = true;
+            
+            // แสดงสถานะกำลังประมวลผล
+            guessBtn.disabled = true;
+            guessBtn.textContent = '🔄 กำลังทาย...';
+            
+            // ตั้ง timeout เพื่อป้องกันการค้าง
+            const timeout = setTimeout(() => {
+                actionInProgress.makeGuess = false;
+                guessBtn.disabled = false;
+                guessBtn.textContent = '🎯 ทาย';
+                showNotification('การเชื่อมต่อช้า กรุณาลองใหม่', 'warning');
+                
+                // ตรวจสอบการเชื่อมต่อและพยายาม reconnect ถ้าจำเป็น
+                if (!gameState.socket.connected && !gameState.isReconnecting) {
+                    attemptReconnection();
+                }
+            }, 10000); // 10 วินาที
+            
             gameState.socket.emit('makeGuess', { guess }, (response) => {
-                if (response.success) {
+                clearTimeout(timeout);
+                actionInProgress.makeGuess = false;
+                guessBtn.disabled = false;
+                guessBtn.textContent = '🎯 ทาย';
+                
+                if (response && response.success) {
                     const resultSection = document.getElementById('resultSection');
                     const resultElement = document.getElementById('guessResult');
                     
@@ -1224,9 +1436,19 @@
                     if (!response.isWin) {
                         gameState.isMyTurn = false;
                         updateCurrentTurn();
+                        
+                        // ล้างช่องทาย
+                        document.getElementById('guessInput').value = '';
                     }
+                } else if (response) {
+                    showNotification(response.message || 'เกิดข้อผิดพลาด', 'error');
                 } else {
-                    showNotification(response.message, 'error');
+                    showNotification('ไม่ได้รับการตอบกลับจาก Server', 'error');
+                    
+                    // ตรวจสอบการเชื่อมต่อ
+                    if (!gameState.socket.connected && !gameState.isReconnecting) {
+                        attemptReconnection();
+                    }
                 }
             });
         }
@@ -1357,10 +1579,13 @@
             const mySecretLabel = mySecretInput.previousElementSibling;
             const submitBtn = document.querySelector('#myPlayerSection .btn');
             const errorElement = document.getElementById('mySecretError');
+            const guessInput = document.getElementById('guessInput');
+            const guessBtn = document.querySelector('#gameSection .btn');
             
             if (mySecretInput) {
                 mySecretInput.value = '';
                 mySecretInput.style.display = 'inline-block';
+                mySecretInput.disabled = false;
             }
             
             if (mySecretLabel) {
@@ -1378,9 +1603,29 @@
                 errorElement.style.color = '';
             }
             
-            document.getElementById('guessInput').value = '';
+            if (guessInput) {
+                guessInput.value = '';
+                guessInput.disabled = false;
+            }
+            
+            if (guessBtn) {
+                guessBtn.disabled = false;
+                guessBtn.textContent = '🎯 ทาย';
+            }
+            
             document.getElementById('roomCodeInput').value = '';
             document.getElementById('joinRoomSection').style.display = 'none';
+            
+            // รีเซ็ตปุ่มต่างๆ ในหน้า lobby
+            const lobbyBtns = document.querySelectorAll('#lobbyPhase .btn');
+            lobbyBtns.forEach(btn => {
+                btn.disabled = false;
+                if (btn.textContent.includes('สร้าง')) {
+                    btn.textContent = '🎮 สร้างห้องใหม่';
+                } else if (btn.textContent.includes('เข้าร่วม')) {
+                    btn.textContent = 'เข้าร่วม';
+                }
+            });
         }
 
         function validateNumber(num) {
@@ -1483,6 +1728,49 @@
             const dialog = document.getElementById('reconnectDialog');
             if (dialog) {
                 dialog.remove();
+            }
+        }
+
+        // ฟังก์ชันตรวจสอบและแก้ไขสถานะ UI
+        function validateAndFixUI() {
+            const guessBtn = document.querySelector('#gameSection .btn');
+            const guessInput = document.getElementById('guessInput');
+            const submitBtn = document.querySelector('#myPlayerSection .btn');
+            const createBtn = document.querySelector('.btn-secondary');
+            const joinBtn = document.querySelector('#joinRoomSection .btn');
+            
+            // แก้ไขปุ่มทาย
+            if (guessBtn && guessBtn.disabled && gameState.gameStarted && gameState.isMyTurn) {
+                console.log('🔧 แก้ไขปุ่มทาย');
+                guessBtn.disabled = false;
+                guessBtn.textContent = '🎯 ทาย';
+            }
+            
+            // แก้ไข input ทาย
+            if (guessInput && guessInput.disabled && gameState.gameStarted && gameState.isMyTurn) {
+                console.log('🔧 แก้ไข input ทาย');
+                guessInput.disabled = false;
+            }
+            
+            // แก้ไขปุ่มส่งตัวเลขลับ
+            if (submitBtn && submitBtn.disabled && !gameState.secretSubmitted) {
+                console.log('🔧 แก้ไขปุ่มส่งตัวเลขลับ');
+                submitBtn.disabled = false;
+                submitBtn.textContent = '🔒 ยืนยัน';
+            }
+            
+            // แก้ไขปุ่มสร้างห้อง
+            if (createBtn && createBtn.disabled && !gameState.roomCode) {
+                console.log('🔧 แก้ไขปุ่มสร้างห้อง');
+                createBtn.disabled = false;
+                createBtn.textContent = '🎮 สร้างห้องใหม่';
+            }
+            
+            // แก้ไขปุ่มเข้าร่วม
+            if (joinBtn && joinBtn.disabled && !gameState.roomCode) {
+                console.log('🔧 แก้ไขปุ่มเข้าร่วม');
+                joinBtn.disabled = false;
+                joinBtn.textContent = 'เข้าร่วม';
             }
         }
 
@@ -1606,11 +1894,29 @@
             gameState.heartbeatInterval = setInterval(() => {
                 if (gameState.socket && gameState.socket.connected) {
                     gameState.lastPingTime = Date.now();
+                    
+                    // ตั้ง timeout สำหรับ ping
+                    const pingTimeout = setTimeout(() => {
+                        console.log('🏓 Ping timeout - อาจเกิดปัญหาการเชื่อมต่อ');
+                        if (!gameState.isReconnecting) {
+                            updateConnectionStatus('waiting');
+                        }
+                    }, 5000);
+                    
                     gameState.socket.emit('ping', (response) => {
+                        clearTimeout(pingTimeout);
                         if (response === 'pong') {
-                            // การเชื่อมต่อดี
+                            const pingTime = Date.now() - gameState.lastPingTime;
+                            console.log(`🏓 Ping: ${pingTime}ms`);
+                            
+                            if (!gameState.isReconnecting) {
+                                updateConnectionStatus('connected');
+                            }
                         }
                     });
+                } else if (!gameState.isReconnecting) {
+                    console.log('💔 Socket ไม่เชื่อมต่อ - พยายาม reconnect');
+                    attemptReconnection();
                 }
             }, 30000); // ส่งทุก 30 วินาที
         }
@@ -1651,19 +1957,22 @@
 
         // Keyboard Event Listeners
         document.getElementById('guessInput').addEventListener('keypress', function(e) {
-            if (e.key === 'Enter' && gameState.isMyTurn) {
+            if (e.key === 'Enter' && gameState.isMyTurn && gameState.gameStarted) {
+                e.preventDefault();
                 makeGuess();
             }
         });
 
         document.getElementById('mySecret').addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') {
+            if (e.key === 'Enter' && !gameState.secretSubmitted) {
+                e.preventDefault();
                 submitSecret();
             }
         });
 
         document.getElementById('roomCodeInput').addEventListener('keypress', function(e) {
             if (e.key === 'Enter') {
+                e.preventDefault();
                 joinRoom();
             }
         });
@@ -1690,18 +1999,32 @@
 
         // Visibility Change - ตรวจสอบเมื่อผู้ใช้เปลี่ยน tab
         document.addEventListener('visibilitychange', function() {
-            if (!document.hidden && gameState.roomCode && !gameState.socket.connected) {
+            if (!document.hidden) {
                 console.log('👁️ กลับมาที่หน้าเว็บ - ตรวจสอบการเชื่อมต่อ');
-                attemptReconnection();
+                
+                // ตรวจสอบและแก้ไข UI
+                setTimeout(() => {
+                    validateAndFixUI();
+                    
+                    // ตรวจสอบการเชื่อมต่อ
+                    if (gameState.roomCode && (!gameState.socket || !gameState.socket.connected) && !gameState.isReconnecting) {
+                        attemptReconnection();
+                    }
+                }, 500);
             }
         });
 
         // Online/Offline Detection
         window.addEventListener('online', function() {
             console.log('🌐 เชื่อมต่ออินเทอร์เน็ตแล้ว');
-            if (gameState.roomCode && !gameState.socket.connected) {
-                attemptReconnection();
-            }
+            updateConnectionStatus('waiting');
+            
+            setTimeout(() => {
+                if (gameState.roomCode && (!gameState.socket || !gameState.socket.connected) && !gameState.isReconnecting) {
+                    attemptReconnection();
+                }
+                validateAndFixUI();
+            }, 1000);
         });
 
         window.addEventListener('offline', function() {
@@ -1711,19 +2034,28 @@
 
         // Auto-reconnect on focus
         window.addEventListener('focus', function() {
-            if (gameState.roomCode && gameState.socket && !gameState.socket.connected) {
+            if (gameState.roomCode && gameState.socket && !gameState.socket.connected && !gameState.isReconnecting) {
                 console.log('🔍 หน้าต่างได้ focus - ตรวจสอบการเชื่อมต่อ');
                 setTimeout(() => {
-                    if (!gameState.socket.connected) {
+                    if (!gameState.socket.connected && !gameState.isReconnecting) {
                         attemptReconnection();
                     }
+                    validateAndFixUI();
                 }, 1000);
             }
         });
 
+        // ตั้งเวลาตรวจสอบและแก้ไข UI ทุกๆ 5 วินาที
+        setInterval(() => {
+            if (gameState.socket && gameState.socket.connected) {
+                validateAndFixUI();
+            }
+        }, 5000);
+
         // Initialize on load
         console.log('✅ เกมทายตัวเลข 4 หลัก พร้อมใช้งาน');
-        console.log('📊 ฟีเจอร์: Real-time, Reconnection, Session Management');
+        console.log('📊 ฟีเจอร์: Real-time, Reconnection, Session Management, Auto UI Fix');
+        console.log('🔧 ระบบแก้ไข UI อัตโนมัติเปิดใช้งาน');
     </script>
 </body>
 </html>
